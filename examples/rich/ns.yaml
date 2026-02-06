@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: rich-ns
+  labels:
+    environment: production
+    team: backend
+  annotations:
+    description: "Rich namespace example with multiple fields"
+    owner: team@example.com
+  finalizers:
+  - kubernetes
+spec: {}
+status:
+  phase: Active

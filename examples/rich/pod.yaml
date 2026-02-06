@@ -1,0 +1,38 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: rich-pod
+  namespace: default
+  labels:
+    app: web
+    version: v1
+  annotations:
+    sidecar: injected
+    prometheus.io/scrape: "true"
+spec:
+  restartPolicy: Always
+  containers:
+  - name: nginx
+    image: nginx:1.25
+    imagePullPolicy: IfNotPresent
+    ports:
+    - containerPort: 80
+      protocol: TCP
+      name: http
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+    env:
+    - name: ENV_VAR
+      value: production
+    volumeMounts:
+    - name: config
+      mountPath: /etc/config
+  volumes:
+  - name: config
+    configMap:
+      name: test-cm
