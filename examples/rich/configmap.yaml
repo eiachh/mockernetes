@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rich-cm
+  namespace: default
+  labels:
+    app: web
+    type: config
+  annotations:
+    description: "Rich ConfigMap with data and binary"
+    created-by: mockernetes
+data:
+  config.yaml: |
+    server:
+      port: 8080
+    log:
+      level: info
+  key: value
+binaryData:
+  secret.bin: U2VjcmV0RGF0YQ==  # base64 for "SecretData"
+immutable: false

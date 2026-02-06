@@ -22,6 +22,6 @@ Run the server: `./apiserver`
 
 The server listens on :8080 with basic HTTP routes for health, ready, and namespace operations.
 
-TODO: How to generate TLS certs
+Generate certs and kubeconfig: `./generate-certs.sh` (edit kubeconfig port if needed)
 
-TODO: How to use kubeconfig
+Use with: `kubectl --kubeconfig=./kubeconfig get ns` (after server runs on 8443 with TLS)
