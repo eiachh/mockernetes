@@ -5,16 +5,14 @@ import (
 	"io"
 	"net/http"
 
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime/serializer"
-	"k8s.io/apimachinery/pkg/util/validation"
-	"k8s.io/client-go/kubernetes/scheme"
-	"mockernetes/internal/storage"
 	"github.com/gin-gonic/gin"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/validation"
+	"mockernetes/internal/resources" // custom structs for mock control (no corev1)
+	"mockernetes/internal/storage"
 )
 
-// buildNamespaceList wraps store items (actual ns only) into K8s list response.
+// buildNamespaceList wraps store items (actual ns only) into K8s list response (uses custom resources.Namespace).
 func buildNamespaceList(items []interface{}) string {
 	list := map[string]interface{}{
 		"kind":       "NamespaceList",
@@ -31,31 +29,30 @@ func ListNamespaces(c *gin.Context) {
 	c.Data(http.StatusOK, "application/json", []byte(buildNamespaceList(items)))
 }
 
-// CreateNamespace parses POST, validates, stores in in-mem map (error if exists); returns Status error for kubectl compat.
+// CreateNamespace parses POST to custom resources.Namespace struct (for mock control, no corev1/scheme decode).
+// Validates, stores; returns Status error for kubectl compat.
 func CreateNamespace(c *gin.Context) {
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
 		WriteError(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	// client-go validator: decode via scheme (enforces kind, apiVersion, basic struct)
-	decoder := serializer.NewCodecFactory(scheme.Scheme).UniversalDeserializer()
-	obj, _, err := decoder.Decode(body, nil, nil)
-	if err != nil {
+	// Unmarshal to custom struct (enforces mock shape; kind/apiVersion from body)
+	var ns resources.Namespace
+	if err := json.Unmarshal(body, &ns); err != nil {
 		WriteError(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	ns, ok := obj.(*corev1.Namespace)
-	if !ok {
+	if ns.Kind == "" {
 		WriteError(c, http.StatusBadRequest, "invalid namespace")
 		return
 	}
-	// client-go/apimachinary validator for name (catches invalid like "Invalid-NS")
-	if errs := validation.IsDNS1123Label(ns.Name); len(errs) != 0 {
+	// validator for name (catches invalid like "Invalid-NS")
+	if errs := validation.IsDNS1123Label(ns.GetName()); len(errs) != 0 {
 		WriteError(c, http.StatusBadRequest, errs[0])
 		return
 	}
-	// store; error if exists
+	// store; error if exists (uses KubeObject impl)
 	if err := storage.DefaultStore.CreateNamespace(ns); err != nil {
 		WriteError(c, http.StatusConflict, err.Error()) // 409 for exists
 		return
