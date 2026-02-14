@@ -34,3 +34,5 @@ go.work.sum
 # Generated certs (from generate-certs.sh)
 certs/
 kubeconfig
+apiserver
+server.log
