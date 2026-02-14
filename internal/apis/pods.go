@@ -5,15 +5,13 @@ import (
 	"io"
 	"net/http"
 
-	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/runtime/serializer"
-	"k8s.io/apimachinery/pkg/util/validation"
-	"k8s.io/client-go/kubernetes/scheme"
-	"mockernetes/internal/storage"
 	"github.com/gin-gonic/gin"
+	"k8s.io/apimachinery/pkg/util/validation"
+	"mockernetes/internal/resources" // custom structs for mock control (no corev1)
+	"mockernetes/internal/storage"
 )
 
-// buildPodList wraps store items into K8s list (similar to ns).
+// buildPodList wraps store items into K8s list (similar to ns; uses custom resources.Pod).
 func buildPodList(items []interface{}) string {
 	list := map[string]interface{}{
 		"kind":       "PodList",
@@ -30,28 +28,30 @@ func ListPods(c *gin.Context) {
 	c.Data(http.StatusOK, "application/json", []byte(buildPodList(items)))
 }
 
-// CreatePod parses POST (like ns), validates with client-go, stores if not exists.
+// CreatePod parses POST to custom resources.Pod struct (for mock control, no corev1/scheme).
+// Validates, stores if not exists.
 func CreatePod(c *gin.Context) {
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
 		WriteError(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	decoder := serializer.NewCodecFactory(scheme.Scheme).UniversalDeserializer()
-	obj, _, err := decoder.Decode(body, nil, nil)
-	if err != nil {
+	// Unmarshal to custom struct (enforces mock shape; kind/apiVersion from body)
+	var pod resources.Pod
+	if err := json.Unmarshal(body, &pod); err != nil {
 		WriteError(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	pod, ok := obj.(*corev1.Pod)
-	if !ok {
+	if pod.Kind == "" {
 		WriteError(c, http.StatusBadRequest, "invalid pod")
 		return
 	}
-	if errs := validation.IsDNS1123Label(pod.Name); len(errs) != 0 {
+	// validator for name
+	if errs := validation.IsDNS1123Label(pod.GetName()); len(errs) != 0 {
 		WriteError(c, http.StatusBadRequest, errs[0])
 		return
 	}
+	// store; uses KubeObject impl from custom struct
 	if err := storage.DefaultStore.CreatePod(pod); err != nil {
 		WriteError(c, http.StatusConflict, err.Error())
 		return

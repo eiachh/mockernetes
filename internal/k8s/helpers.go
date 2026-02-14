@@ -1,19 +1,5 @@
 package k8s
 
-// TODO: Define ObjectMeta struct
-type ObjectMeta struct {
-	Name string `json:"name"`
-	// TODO: add other fields
-}
-
-// TODO: Define list response struct
-type ListResponse struct {
-	Items []interface{} `json:"items"`
-	// TODO: add metadata
-}
-
-// TODO: Helper functions for JSON responses
-func NewListResponse(items []interface{}) ListResponse {
-	// TODO
-	return ListResponse{}
-}
+// Deprecated: resource structs/impls/KubeObject moved to internal/resources pkg for separation (resources owns impls, storage strict storage).
+// This file minimized; retain for any leftover TODOs/helpers if needed.
+// (corev1/appsv1 already removed earlier; no active use).

@@ -1,10 +1,12 @@
 package server
 
 import (
+	"fmt"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
 	"mockernetes/internal/apis"
+	"mockernetes/internal/auth"
 )
 
 func NewServer() {
@@ -13,8 +15,26 @@ func NewServer() {
 	// wire routes including discovery
 	wireRoutes(r)
 
-	// run HTTPS on localhost:8443 with certs
-	if err := r.RunTLS("127.0.0.1:8443", "certs/server.crt", "certs/server.key"); err != nil {
+	// Configure full mTLS using auth package (Gin RunTLS only serves certs but does not verify client certs).
+	// We use http.Server + tls.Config from auth.NewTLSConfig which:
+	// - Sets ClientAuth: tls.RequireAndVerifyClientCert
+	// - Uses CA pool to verify client cert chain
+	// - Delegates further cert checks (via ExtractUser) to auth.go
+	// This satisfies kubectl mTLS via the provided kubeconfig/client.crt
+	tlsConfig, err := auth.NewTLSConfig("certs/server.crt", "certs/server.key", "certs/ca.crt")
+	if err != nil {
+		panic(fmt.Errorf("failed to setup mTLS config: %w", err))
+	}
+
+	// Custom http.Server required because Gin's RunTLS does not expose ClientCAs/ClientAuth options.
+	// ListenAndServeTLS with empty cert/key paths uses the pre-loaded Certificates from TLSConfig.
+	srv := &http.Server{
+		Addr:      "127.0.0.1:8443",
+		Handler:   r,
+		TLSConfig: tlsConfig,
+	}
+
+	if err := srv.ListenAndServeTLS("", ""); err != nil {
 		panic(err)
 	}
 }
@@ -32,7 +52,7 @@ func wireRoutes(r *gin.Engine) {
 	r.GET("/readyz", readyzHandler)
 	r.GET("/api/v1/namespaces", apis.ListNamespaces)
 	r.POST("/api/v1/namespaces", apis.CreateNamespace)
-	// cluster + namespaced for pods/cms
+	// cluster + namespaced for pods/cms (similarly for apps/v1 deploy/rs below)
 	r.GET("/api/v1/pods", apis.ListPods)
 	r.POST("/api/v1/pods", apis.CreatePod)
 	r.GET("/api/v1/namespaces/:namespace/pods", apis.ListPods)
@@ -41,6 +61,17 @@ func wireRoutes(r *gin.Engine) {
 	r.POST("/api/v1/configmaps", apis.CreateConfigMap)
 	r.GET("/api/v1/namespaces/:namespace/configmaps", apis.ListConfigMaps)
 	r.POST("/api/v1/namespaces/:namespace/configmaps", apis.CreateConfigMap)
+
+	// apps/v1 resources (deployments + replicasets; cluster-scoped paths + namespaced like pods.
+	// Note: /apis/apps/v1/... for group-version; mirrors pod handling for minimal mock.
+	r.GET("/apis/apps/v1/deployments", apis.ListDeployments)
+	r.POST("/apis/apps/v1/deployments", apis.CreateDeployment)
+	r.GET("/apis/apps/v1/namespaces/:namespace/deployments", apis.ListDeployments)
+	r.POST("/apis/apps/v1/namespaces/:namespace/deployments", apis.CreateDeployment)
+	r.GET("/apis/apps/v1/replicasets", apis.ListReplicaSets)
+	r.POST("/apis/apps/v1/replicasets", apis.CreateReplicaSet)
+	r.GET("/apis/apps/v1/namespaces/:namespace/replicasets", apis.ListReplicaSets)
+	r.POST("/apis/apps/v1/namespaces/:namespace/replicasets", apis.CreateReplicaSet)
 }
 
 func healthzHandler(c *gin.Context) {
