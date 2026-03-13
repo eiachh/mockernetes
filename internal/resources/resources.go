@@ -14,10 +14,11 @@ type KubeObject interface {
 
 // ObjectMeta shared for custom resource structs.
 type ObjectMeta struct {
-	Name        string            `json:"name"`
-	Namespace   string            `json:"namespace,omitempty"`
-	Labels      map[string]string `json:"labels,omitempty"`
-	Annotations map[string]string `json:"annotations,omitempty"`
+	Name              string            `json:"name"`
+	Namespace         string            `json:"namespace,omitempty"`
+	Labels            map[string]string `json:"labels,omitempty"`
+	Annotations       map[string]string `json:"annotations,omitempty"`
+	CreationTimestamp string            `json:"creationTimestamp,omitempty"`
 	// TODO: uid, resourceVersion for full mock
 }
 

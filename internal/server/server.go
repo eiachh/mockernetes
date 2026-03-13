@@ -2,14 +2,21 @@ package server
 
 import (
 	"fmt"
+
 	"net/http"
 
-	"github.com/gin-gonic/gin"
 	"mockernetes/internal/apis"
 	"mockernetes/internal/auth"
+	"mockernetes/internal/controllers"
+	"mockernetes/internal/storage"
+
+	"github.com/gin-gonic/gin"
 )
 
 func NewServer() {
+	// Initialize the pod controller for lifecycle management
+	controllers.InitPodController(storage.DefaultStore)
+
 	r := gin.Default()
 
 	// wire routes including discovery
