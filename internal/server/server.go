@@ -2,18 +2,34 @@ package server
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
 	"mockernetes/internal/apis"
 	"mockernetes/internal/auth"
+	"mockernetes/internal/controllers"
+	"mockernetes/internal/storage"
 )
 
 func NewServer() {
+	// Initialize the pod controller for lifecycle management
+	controllers.InitPodController(storage.DefaultStore)
+
 	r := gin.Default()
 
 	// wire routes including discovery
 	wireRoutes(r)
+
+	// Verify TLS certificates before setting up mTLS
+	// This checks existence and expiration, logging any failures
+	certPaths := []string{"certs/server.crt", "certs/server.key", "certs/ca.crt"}
+	if err := auth.VerifyTLSCertificates("certs/server.crt", "certs/server.key", "certs/ca.crt"); err != nil {
+		log.Printf("TLS certificate verification failed: %v", err)
+		log.Printf("TLS certificates expected at: %v", certPaths)
+		log.Printf("Server cannot start without valid TLS certificates. Exiting.")
+		return
+	}
 
 	// Configure full mTLS using auth package (Gin RunTLS only serves certs but does not verify client certs).
 	// We use http.Server + tls.Config from auth.NewTLSConfig which:
