@@ -3,8 +3,10 @@ package auth
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"os"
+	"time"
 )
 
 // NewTLSConfig creates a TLS configuration that enforces full mutual TLS (mTLS) authentication.
@@ -75,4 +77,74 @@ func ExtractUser(cert *x509.Certificate) string {
 	}
 	// Could enhance: combine with Organization for groups, but keep minimal for mock
 	return cert.Subject.CommonName
+}
+
+// VerifyTLSCertificates checks if the TLS certificates exist and are not expired.
+// Returns an error with details if any check fails, nil on success.
+// On failure, logs the specific issue. On success, does not log anything.
+func VerifyTLSCertificates(serverCert, serverKey, caCertPath string) error {
+	// Check if server certificate file exists
+	if _, err := os.Stat(serverCert); os.IsNotExist(err) {
+		return fmt.Errorf("server certificate file not found: %s", serverCert)
+	}
+
+	// Check if server key file exists
+	if _, err := os.Stat(serverKey); os.IsNotExist(err) {
+		return fmt.Errorf("server key file not found: %s", serverKey)
+	}
+
+	// Check if CA certificate file exists
+	if _, err := os.Stat(caCertPath); os.IsNotExist(err) {
+		return fmt.Errorf("CA certificate file not found: %s", caCertPath)
+	}
+
+	// Load and validate server certificate
+	cert, err := tls.LoadX509KeyPair(serverCert, serverKey)
+	if err != nil {
+		return fmt.Errorf("failed to load server certificate/key pair: %w", err)
+	}
+
+	// Parse the server certificate to check expiration
+	x509Cert, err := x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		return fmt.Errorf("failed to parse server certificate: %w", err)
+	}
+
+	// Check if server certificate is expired
+	now := time.Now()
+	if now.Before(x509Cert.NotBefore) {
+		return fmt.Errorf("server certificate is not yet valid (valid from: %s)", x509Cert.NotBefore.Format(time.RFC3339))
+	}
+	if now.After(x509Cert.NotAfter) {
+		return fmt.Errorf("server certificate has expired (expired on: %s)", x509Cert.NotAfter.Format(time.RFC3339))
+	}
+
+	// Load and validate CA certificate
+	caCert, err := os.ReadFile(caCertPath)
+	if err != nil {
+		return fmt.Errorf("failed to read CA certificate: %w", err)
+	}
+
+	caCertPool := x509.NewCertPool()
+	if !caCertPool.AppendCertsFromPEM(caCert) {
+		return fmt.Errorf("failed to parse CA certificate: invalid PEM format")
+	}
+
+	// Parse CA certificate to check expiration using PEM decoding
+	block, _ := pem.Decode(caCert)
+	if block == nil {
+		return fmt.Errorf("failed to decode CA certificate PEM block")
+	}
+	caX509Cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return fmt.Errorf("failed to parse CA certificate: %w", err)
+	}
+	if now.Before(caX509Cert.NotBefore) {
+		return fmt.Errorf("CA certificate is not yet valid (valid from: %s)", caX509Cert.NotBefore.Format(time.RFC3339))
+	}
+	if now.After(caX509Cert.NotAfter) {
+		return fmt.Errorf("CA certificate has expired (expired on: %s)", caX509Cert.NotAfter.Format(time.RFC3339))
+	}
+
+	return nil
 }

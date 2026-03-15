@@ -42,7 +42,7 @@ func TestListPods(t *testing.T) {
 
 	// Run pod through the controller lifecycle so status is set
 	// Use a short delay so the test doesn't wait long
-	controllers.DefaultPodController = controllers.NewPodController(storage.DefaultStore, 20*time.Second)
+	controllers.DefaultPodController = controllers.NewPodController(storage.DefaultStore, 50*time.Millisecond)
 	controllers.DefaultPodController.Start()
 	controllers.DefaultPodController.OnPodCreated(pod)
 
