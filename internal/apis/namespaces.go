@@ -62,6 +62,10 @@ func CreateNamespace(c *gin.Context) {
 
 // WriteError returns K8s Status for kubectl to parse/display error (e.g. on invalid ns).
 func WriteError(c *gin.Context, code int, msg string) {
+	reason := metav1.StatusReasonInvalid
+	if code == http.StatusNotFound {
+		reason = metav1.StatusReasonNotFound
+	}
 	status := metav1.Status{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "Status",
@@ -69,7 +73,7 @@ func WriteError(c *gin.Context, code int, msg string) {
 		},
 		Status:  metav1.StatusFailure,
 		Message: msg,
-		Reason:  metav1.StatusReasonInvalid,
+		Reason:  reason,
 		Code:    int32(code),
 	}
 	c.JSON(code, status)

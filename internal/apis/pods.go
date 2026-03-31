@@ -356,12 +356,39 @@ func CreatePod(c *gin.Context) {
 		return
 	}
 
-	// Notify the controller to manage the pod lifecycle
-	// Sets Pending immediately; transitions to Running asynchronously after StartupDelay
-	if controllers.DefaultPodController != nil {
-		if err := controllers.DefaultPodController.OnPodCreated(pod); err != nil {
-			// Log error but don't fail the creation - the pod is already stored
-			_ = err
+	// Check if there's a pre-defined transition template for this pod
+	namespace := pod.GetNamespace()
+	if namespace == "" {
+		namespace = "default"
+	}
+
+	if controllers.DefaultTemplateRegistry != nil {
+		if template, exists := controllers.DefaultTemplateRegistry.GetTemplate(namespace, pod.GetName()); exists {
+			// Use the pre-defined transition sequence
+			if controllers.DefaultTransitionManager != nil {
+				req := controllers.TransitionRequest{
+					PodName:        pod.GetName(),
+					Namespace:      namespace,
+					CancelExisting: true,
+					Transitions:    template.Transitions,
+				}
+				controllers.DefaultTransitionManager.StartTransition(req)
+			}
+		} else {
+			// Use default controller behavior
+			if controllers.DefaultPodController != nil {
+				if err := controllers.DefaultPodController.OnPodCreated(pod); err != nil {
+					// Log error but don't fail the creation - the pod is already stored
+					_ = err
+				}
+			}
+		}
+	} else {
+		// Fallback to default controller behavior
+		if controllers.DefaultPodController != nil {
+			if err := controllers.DefaultPodController.OnPodCreated(pod); err != nil {
+				_ = err
+			}
 		}
 	}
 
@@ -373,4 +400,40 @@ func CreatePod(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusCreated, storedPod)
+}
+
+// DeletePod handles DELETE /api/v1/pods/:name and /api/v1/namespaces/:namespace/pods/:name
+// Deletes a pod by name
+func DeletePod(c *gin.Context) {
+	podName := c.Param("name")
+	namespace := c.Param("namespace")
+	if namespace == "" {
+		namespace = "default"
+	}
+
+	// Check if pod exists first
+	existingPod, err := storage.DefaultStore.GetPod(podName)
+	if err != nil {
+		WriteError(c, http.StatusNotFound, fmt.Sprintf("pods \"%s\" not found", podName))
+		return
+	}
+
+	// Cancel any active transitions for this pod
+	if controllers.DefaultTransitionManager != nil {
+		controllers.DefaultTransitionManager.CancelTransition(namespace, podName)
+	}
+
+	// Remove any registered template for this pod
+	if controllers.DefaultTemplateRegistry != nil {
+		controllers.DefaultTemplateRegistry.RemoveTemplate(namespace, podName)
+	}
+
+	// Delete the pod
+	if err := storage.DefaultStore.DeletePod(podName); err != nil {
+		WriteError(c, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Return the deleted pod object (kubectl expects this)
+	c.JSON(http.StatusOK, existingPod)
 }

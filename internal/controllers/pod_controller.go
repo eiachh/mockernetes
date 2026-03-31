@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -306,8 +307,276 @@ func (pc *PodController) updatePodStatusWithMetadata(pod resources.Pod, status P
 	return pc.store.UpdatePod(updatedPod)
 }
 
+// TransitionState defines a single state in a pod's lifecycle transition
+// with the duration to wait before applying it.
+type TransitionState struct {
+	Phase           string                 `json:"phase"`
+	Delay           string                 `json:"delay"`
+	PodIP           string                 `json:"podIP,omitempty"`
+	HostIP          string                 `json:"hostIP,omitempty"`
+	Conditions      []PodCondition         `json:"conditions,omitempty"`
+	ContainerStates map[string]interface{} `json:"containerStates,omitempty"`
+}
+
+// TransitionRequest defines a complete state transition sequence for a pod
+type TransitionRequest struct {
+	PodName        string            `json:"podName"`
+	Namespace      string            `json:"namespace,omitempty"`
+	CancelExisting bool              `json:"cancelExisting,omitempty"`
+	Transitions    []TransitionState `json:"transitions"`
+}
+
+// ActiveTransition tracks a running transition sequence for a pod
+type ActiveTransition struct {
+	PodName     string
+	Namespace   string
+	CancelFunc  context.CancelFunc
+	Transitions []TransitionState
+}
+
+// TransitionManager manages active state transitions across pods
+type TransitionManager struct {
+	mu        sync.RWMutex
+	active    map[string]*ActiveTransition // key: "namespace/podName"
+	store     *storage.InMemoryStore
+}
+
+// NewTransitionManager creates a new transition manager
+func NewTransitionManager(store *storage.InMemoryStore) *TransitionManager {
+	return &TransitionManager{
+		active: make(map[string]*ActiveTransition),
+		store:  store,
+	}
+}
+
+// key generates a unique key for a pod
+func (tm *TransitionManager) key(namespace, podName string) string {
+	if namespace == "" {
+		namespace = "default"
+	}
+	return fmt.Sprintf("%s/%s", namespace, podName)
+}
+
+// CancelTransition cancels any active transition for the given pod
+func (tm *TransitionManager) CancelTransition(namespace, podName string) bool {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+
+	key := tm.key(namespace, podName)
+	if active, exists := tm.active[key]; exists {
+		active.CancelFunc()
+		delete(tm.active, key)
+		return true
+	}
+	return false
+}
+
+// StartTransition begins a new state transition sequence for a pod
+func (tm *TransitionManager) StartTransition(req TransitionRequest) (*ActiveTransition, error) {
+	if req.PodName == "" {
+		return nil, fmt.Errorf("podName is required")
+	}
+	if len(req.Transitions) == 0 {
+		return nil, fmt.Errorf("at least one transition is required")
+	}
+
+	namespace := req.Namespace
+	if namespace == "" {
+		namespace = "default"
+	}
+
+	// Cancel existing transition if requested
+	if req.CancelExisting {
+		tm.CancelTransition(namespace, req.PodName)
+	}
+
+	// Verify pod exists
+	_, err := tm.store.GetPod(req.PodName)
+	if err != nil {
+		return nil, fmt.Errorf("pod %s not found: %w", req.PodName, err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	active := &ActiveTransition{
+		PodName:     req.PodName,
+		Namespace:   namespace,
+		CancelFunc:  cancel,
+		Transitions: req.Transitions,
+	}
+
+	// Store the active transition
+	tm.mu.Lock()
+	tm.active[tm.key(namespace, req.PodName)] = active
+	tm.mu.Unlock()
+
+	// Start the transition sequence in background
+	go tm.runTransitionSequence(ctx, active)
+
+	return active, nil
+}
+
+// runTransitionSequence executes the state transition sequence
+func (tm *TransitionManager) runTransitionSequence(ctx context.Context, active *ActiveTransition) {
+	defer func() {
+		// Clean up on completion
+		tm.mu.Lock()
+		delete(tm.active, tm.key(active.Namespace, active.PodName))
+		tm.mu.Unlock()
+	}()
+
+	for i, state := range active.Transitions {
+		select {
+		case <-ctx.Done():
+			return // Transition was cancelled
+		default:
+		}
+
+		// Parse delay duration
+		delay, err := time.ParseDuration(state.Delay)
+		if err != nil {
+			delay = 0
+		}
+
+		// Wait for the delay (skip for first state if delay is 0)
+		if i > 0 || delay > 0 {
+			select {
+			case <-time.After(delay):
+			case <-ctx.Done():
+				return
+			}
+		}
+
+		// Apply the state
+		tm.applyState(active.Namespace, active.PodName, state)
+	}
+}
+
+// applyState applies a single transition state to a pod
+func (tm *TransitionManager) applyState(namespace, podName string, state TransitionState) error {
+	// Get current pod
+	existingPod, err := tm.store.GetPod(podName)
+	if err != nil {
+		return err
+	}
+
+	// Build conditions with timestamps
+	now := time.Now()
+	conditions := make([]PodCondition, 0, len(state.Conditions))
+	for _, cond := range state.Conditions {
+		cond.LastTransitionTime = &now
+		conditions = append(conditions, cond)
+	}
+
+	// Build status
+	status := PodStatus{
+		Phase:      PodPhase(state.Phase),
+		PodIP:      state.PodIP,
+		HostIP:     state.HostIP,
+		Conditions: conditions,
+	}
+
+	// Build container statuses if provided
+	if len(state.ContainerStates) > 0 {
+		status.ContainerStatuses = tm.buildContainerStatusesFromStates(state.ContainerStates)
+	}
+
+	// Extract existing metadata
+	metadata := resources.ObjectMeta{
+		Name:      podName,
+		Namespace: namespace,
+	}
+	if meta, ok := existingPod["metadata"].(map[string]interface{}); ok {
+		if ns, ok := meta["namespace"].(string); ok {
+			metadata.Namespace = ns
+		}
+		if ct, ok := meta["creationTimestamp"].(string); ok {
+			metadata.CreationTimestamp = ct
+		}
+		if labels, ok := meta["labels"].(map[string]interface{}); ok {
+			metadata.Labels = make(map[string]string)
+			for k, v := range labels {
+				if sv, ok := v.(string); ok {
+					metadata.Labels[k] = sv
+				}
+			}
+		}
+	}
+
+	// Extract spec
+	var spec interface{}
+	if s, ok := existingPod["spec"]; ok {
+		spec = s
+	}
+
+	// Create updated pod
+	updatedPod := resources.Pod{
+		Kind:       "Pod",
+		APIVersion: "v1",
+		Metadata:   metadata,
+		Spec:       spec,
+		Status:     status,
+	}
+
+	return tm.store.UpdatePod(updatedPod)
+}
+
+// buildContainerStatusesFromStates creates ContainerStatus from the state definition
+func (tm *TransitionManager) buildContainerStatusesFromStates(states map[string]interface{}) []ContainerStatus {
+	var statuses []ContainerStatus
+	now := time.Now()
+
+	for name, stateDef := range states {
+		if stateMap, ok := stateDef.(map[string]interface{}); ok {
+			status := ContainerStatus{
+				Name:         name,
+				Image:        "custom-image",
+				ImageID:      "docker-pullable://custom@sha256:mock",
+				ContainerID:  fmt.Sprintf("docker://%s", name),
+				Ready:        true,
+				RestartCount: 0,
+				State:        stateMap,
+				LastState:    map[string]interface{}{},
+			}
+			// Set startedAt if running state
+			if running, ok := stateMap["running"].(map[string]interface{}); ok {
+				if _, exists := running["startedAt"]; !exists {
+					running["startedAt"] = now.Format(time.RFC3339)
+				}
+			}
+			statuses = append(statuses, status)
+		}
+	}
+
+	return statuses
+}
+
+// GetActiveTransition returns the active transition for a pod if any
+func (tm *TransitionManager) GetActiveTransition(namespace, podName string) (*ActiveTransition, bool) {
+	tm.mu.RLock()
+	defer tm.mu.RUnlock()
+
+	active, exists := tm.active[tm.key(namespace, podName)]
+	return active, exists
+}
+
+// ListActiveTransitions returns all active transitions
+func (tm *TransitionManager) ListActiveTransitions() []*ActiveTransition {
+	tm.mu.RLock()
+	defer tm.mu.RUnlock()
+
+	result := make([]*ActiveTransition, 0, len(tm.active))
+	for _, active := range tm.active {
+		result = append(result, active)
+	}
+	return result
+}
+
 // DefaultPodController is the singleton instance
 var DefaultPodController *PodController
+
+// DefaultTransitionManager is the singleton transition manager
+var DefaultTransitionManager *TransitionManager
 
 // DefaultStartupDelay is the default time a pod stays in Pending before transitioning to Running.
 const DefaultStartupDelay = 20 * time.Second
@@ -316,4 +585,100 @@ const DefaultStartupDelay = 20 * time.Second
 func InitPodController(store *storage.InMemoryStore) {
 	DefaultPodController = NewPodController(store, DefaultStartupDelay)
 	DefaultPodController.Start()
+	DefaultTransitionManager = NewTransitionManager(store)
+}
+
+// TransitionTemplate stores a pre-defined transition sequence for a pod name
+type TransitionTemplate struct {
+	PodName     string            `json:"podName"`
+	Namespace   string            `json:"namespace,omitempty"`
+	Transitions []TransitionState `json:"transitions"`
+	CreatedAt   time.Time         `json:"createdAt"`
+}
+
+// TemplateRegistry manages pre-defined transition templates
+type TemplateRegistry struct {
+	mu        sync.RWMutex
+	templates map[string]*TransitionTemplate // key: "namespace/podName"
+}
+
+// NewTemplateRegistry creates a new template registry
+func NewTemplateRegistry() *TemplateRegistry {
+	return &TemplateRegistry{
+		templates: make(map[string]*TransitionTemplate),
+	}
+}
+
+// key generates a unique key for a pod template
+func (tr *TemplateRegistry) key(namespace, podName string) string {
+	if namespace == "" {
+		namespace = "default"
+	}
+	return fmt.Sprintf("%s/%s", namespace, podName)
+}
+
+// RegisterTemplate stores a transition template for a pod name
+func (tr *TemplateRegistry) RegisterTemplate(template TransitionTemplate) error {
+	if template.PodName == "" {
+		return fmt.Errorf("podName is required")
+	}
+	if len(template.Transitions) == 0 {
+		return fmt.Errorf("at least one transition is required")
+	}
+
+	namespace := template.Namespace
+	if namespace == "" {
+		namespace = "default"
+	}
+
+	template.Namespace = namespace
+	template.CreatedAt = time.Now()
+
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+
+	tr.templates[tr.key(namespace, template.PodName)] = &template
+	return nil
+}
+
+// GetTemplate retrieves a template for a pod if one exists
+func (tr *TemplateRegistry) GetTemplate(namespace, podName string) (*TransitionTemplate, bool) {
+	tr.mu.RLock()
+	defer tr.mu.RUnlock()
+
+	template, exists := tr.templates[tr.key(namespace, podName)]
+	return template, exists
+}
+
+// RemoveTemplate removes a template for a pod
+func (tr *TemplateRegistry) RemoveTemplate(namespace, podName string) bool {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+
+	key := tr.key(namespace, podName)
+	if _, exists := tr.templates[key]; exists {
+		delete(tr.templates, key)
+		return true
+	}
+	return false
+}
+
+// ListTemplates returns all registered templates
+func (tr *TemplateRegistry) ListTemplates() []*TransitionTemplate {
+	tr.mu.RLock()
+	defer tr.mu.RUnlock()
+
+	result := make([]*TransitionTemplate, 0, len(tr.templates))
+	for _, template := range tr.templates {
+		result = append(result, template)
+	}
+	return result
+}
+
+// DefaultTemplateRegistry is the singleton template registry
+var DefaultTemplateRegistry *TemplateRegistry
+
+// InitTemplateRegistry initializes the default template registry
+func InitTemplateRegistry() {
+	DefaultTemplateRegistry = NewTemplateRegistry()
 }

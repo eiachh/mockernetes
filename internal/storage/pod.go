@@ -72,3 +72,31 @@ func (s *InMemoryStore) GetPod(name string) (map[string]interface{}, error) {
 
 	return pod, nil
 }
+
+// DeletePod removes a pod from storage.
+// Returns error if the pod doesn't exist.
+func (s *InMemoryStore) DeletePod(name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, exists := s.podData[name]; !exists {
+		return fmt.Errorf("pod %s not found", name)
+	}
+
+	delete(s.podData, name)
+	return nil
+}
+
+// UpdatePodFromJSON updates a pod directly with JSON bytes.
+// This is used internally by controllers that need to preserve complex metadata.
+func (s *InMemoryStore) UpdatePodFromJSON(name string, jsonData []byte) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, exists := s.podData[name]; !exists {
+		return fmt.Errorf("pod %s not found", name)
+	}
+
+	s.podData[name] = string(jsonData)
+	return nil
+}
