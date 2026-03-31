@@ -16,6 +16,10 @@ import (
 func NewServer() {
 	// Initialize the pod controller for lifecycle management
 	controllers.InitPodController(storage.DefaultStore)
+	// Initialize the template registry for pre-defined pod behaviors
+	controllers.InitTemplateRegistry()
+	// Initialize the ReplicaSet controller for managing ReplicaSets and their pods
+	controllers.InitReplicaSetController(storage.DefaultStore)
 
 	r := gin.Default()
 
@@ -72,8 +76,10 @@ func wireRoutes(r *gin.Engine) {
 	// cluster + namespaced for pods/cms (similarly for apps/v1 deploy/rs below)
 	r.GET("/api/v1/pods", apis.ListPods)
 	r.POST("/api/v1/pods", apis.CreatePod)
+	r.DELETE("/api/v1/pods/:name", apis.DeletePod)
 	r.GET("/api/v1/namespaces/:namespace/pods", apis.ListPods)
 	r.POST("/api/v1/namespaces/:namespace/pods", apis.CreatePod)
+	r.DELETE("/api/v1/namespaces/:namespace/pods/:name", apis.DeletePod)
 	r.GET("/api/v1/configmaps", apis.ListConfigMaps)
 	r.POST("/api/v1/configmaps", apis.CreateConfigMap)
 	r.GET("/api/v1/namespaces/:namespace/configmaps", apis.ListConfigMaps)
@@ -89,6 +95,14 @@ func wireRoutes(r *gin.Engine) {
 	r.POST("/apis/apps/v1/replicasets", apis.CreateReplicaSet)
 	r.GET("/apis/apps/v1/namespaces/:namespace/replicasets", apis.ListReplicaSets)
 	r.POST("/apis/apps/v1/namespaces/:namespace/replicasets", apis.CreateReplicaSet)
+	r.GET("/apis/apps/v1/namespaces/:namespace/replicasets/:name", apis.GetReplicaSet)
+	r.DELETE("/apis/apps/v1/namespaces/:namespace/replicasets/:name", apis.DeleteReplicaSet)
+
+	// Simulation endpoints for configurable pod state transitions
+	r.POST("/simulate/controller/pod", apis.SimulatePod)
+	r.GET("/simulate/controller/pod", apis.ListActiveTransitions)
+	r.GET("/simulate/controller/pod/:name", apis.GetPodTransition)
+	r.DELETE("/simulate/controller/pod/:name", apis.CancelPodTransition)
 }
 
 func healthzHandler(c *gin.Context) {
