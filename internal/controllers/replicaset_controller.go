@@ -1,7 +1,6 @@
 package controllers
 
 import (
-	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -223,16 +222,16 @@ func (rsc *ReplicaSetController) createPodForReplicaSet(rsName, namespace string
 	podName := fmt.Sprintf("%s-%d", rsName, time.Now().UnixNano())
 
 	// Build owner reference
-	ownerRef := map[string]interface{}{
-		"apiVersion":         "apps/v1",
-		"kind":               "ReplicaSet",
-		"name":               rsName,
-		"uid":                fmt.Sprintf("rs-uid-%s", rsName),
-		"controller":         true,
-		"blockOwnerDeletion": true,
+	ownerRef := resources.OwnerReference{
+		APIVersion:         "apps/v1",
+		Kind:               "ReplicaSet",
+		Name:               rsName,
+		UID:                fmt.Sprintf("rs-uid-%s", rsName),
+		Controller:         true,
+		BlockOwnerDeletion: true,
 	}
 
-	// Create the pod struct
+	// Create the pod struct with ownerReferences
 	pod := resources.Pod{
 		Kind:       "Pod",
 		APIVersion: "v1",
@@ -241,43 +240,20 @@ func (rsc *ReplicaSetController) createPodForReplicaSet(rsName, namespace string
 			Namespace:         namespace,
 			Labels:            labels,
 			CreationTimestamp: time.Now().Format(time.RFC3339),
+			OwnerReferences:   []resources.OwnerReference{ownerRef},
 		},
 		Spec: templateSpec,
 	}
 
-	// Store the pod first (without ownerReferences - they will be added after storage)
+	// Store the pod
 	if err := rsc.store.CreatePod(pod); err != nil {
 		return fmt.Errorf("failed to create pod for ReplicaSet: %w", err)
-	}
-
-	// Now update the stored pod to add ownerReferences properly
-	storedPod, err := rsc.store.GetPod(podName)
-	if err != nil {
-		return err
-	}
-
-	// Add ownerReferences and labels to the stored pod's metadata
-	if meta, ok := storedPod["metadata"].(map[string]interface{}); ok {
-		meta["ownerReferences"] = []interface{}{ownerRef}
-		meta["labels"] = labels
-	}
-
-	// Marshal the updated pod back to JSON
-	updatedJSON, err := json.Marshal(storedPod)
-	if err != nil {
-		return fmt.Errorf("failed to marshal updated pod: %w", err)
-	}
-
-	// Store the updated JSON directly
-	if err := rsc.store.UpdatePodFromJSON(podName, updatedJSON); err != nil {
-		return fmt.Errorf("failed to update pod with ownerReferences: %w", err)
 	}
 
 	fmt.Printf("[RS Controller] Created pod %s with ownerReferences for ReplicaSet %s\n", podName, rsName)
 
 	// Trigger pod controller for lifecycle management
 	if DefaultPodController != nil {
-		// Use the stored pod (with ownerReferences) for the controller
 		DefaultPodController.OnPodCreated(pod)
 	}
 

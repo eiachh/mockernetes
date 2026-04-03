@@ -7,6 +7,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"k8s.io/apimachinery/pkg/util/validation"
+	"mockernetes/internal/controllers"
 	"mockernetes/internal/resources" // custom structs for mock control (no appsv1)
 	"mockernetes/internal/storage"
 )
@@ -57,5 +58,21 @@ func CreateDeployment(c *gin.Context) {
 		WriteError(c, http.StatusConflict, err.Error())
 		return
 	}
-	c.JSON(http.StatusCreated, deploy)
+
+	// Trigger deployment controller for immediate reconciliation
+	if controllers.DefaultDeploymentController != nil {
+		if err := controllers.DefaultDeploymentController.OnDeploymentCreated(deploy); err != nil {
+			// Log error but don't fail the creation - the deployment is already stored
+			_ = err
+		}
+	}
+
+	// Return the deployment with status from storage
+	storedDeploy, err := storage.DefaultStore.GetDeployment(deploy.GetName())
+	if err != nil {
+		// Fallback to returning the original deployment if get fails
+		c.JSON(http.StatusCreated, deploy)
+		return
+	}
+	c.JSON(http.StatusCreated, storedDeploy)
 }
