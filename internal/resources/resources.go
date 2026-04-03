@@ -12,6 +12,16 @@ type KubeObject interface {
 	GetKind() string // e.g., "Pod" (GetKind to avoid field conflict)
 }
 
+// OwnerReference represents a reference to an owning object
+type OwnerReference struct {
+	APIVersion         string `json:"apiVersion"`
+	Kind               string `json:"kind"`
+	Name               string `json:"name"`
+	UID                string `json:"uid,omitempty"`
+	Controller         bool   `json:"controller,omitempty"`
+	BlockOwnerDeletion bool   `json:"blockOwnerDeletion,omitempty"`
+}
+
 // ObjectMeta shared for custom resource structs.
 type ObjectMeta struct {
 	Name              string            `json:"name"`
@@ -19,6 +29,7 @@ type ObjectMeta struct {
 	Labels            map[string]string `json:"labels,omitempty"`
 	Annotations       map[string]string `json:"annotations,omitempty"`
 	CreationTimestamp string            `json:"creationTimestamp,omitempty"`
+	OwnerReferences   []OwnerReference  `json:"ownerReferences,omitempty"`
 	// TODO: uid, resourceVersion for full mock
 }
 

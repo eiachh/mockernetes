@@ -255,7 +255,7 @@ func (pc *PodController) OnPodFailed(pod resources.Pod, reason string) error {
 }
 
 // updatePodStatus updates the pod status in the store
-// Preserves existing metadata including creationTimestamp
+// Preserves existing metadata including creationTimestamp and ownerReferences
 func (pc *PodController) updatePodStatus(pod resources.Pod, status PodStatus) error {
 	// Get existing pod from storage to preserve metadata
 	existingPod, err := pc.store.GetPod(pod.GetName())
@@ -266,10 +266,16 @@ func (pc *PodController) updatePodStatus(pod resources.Pod, status PodStatus) er
 
 	metadata := pod.Metadata
 	if existingPod != nil {
-		// Preserve creationTimestamp from existing pod
 		if meta, ok := existingPod["metadata"].(map[string]interface{}); ok {
+			// Preserve creationTimestamp from existing pod
 			if ct, ok := meta["creationTimestamp"].(string); ok && ct != "" {
 				metadata.CreationTimestamp = ct
+			}
+			// Preserve ownerReferences from existing pod if not set in incoming pod
+			if len(metadata.OwnerReferences) == 0 {
+				if ownerRefsRaw, ok := meta["ownerReferences"].([]interface{}); ok {
+					metadata.OwnerReferences = convertToOwnerReferences(ownerRefsRaw)
+				}
 			}
 		}
 	}
@@ -287,12 +293,58 @@ func (pc *PodController) updatePodStatus(pod resources.Pod, status PodStatus) er
 	return pc.store.UpdatePod(updatedPod)
 }
 
+// convertToOwnerReferences converts []interface{} to []resources.OwnerReference
+func convertToOwnerReferences(ownerRefsRaw []interface{}) []resources.OwnerReference {
+	var ownerRefs []resources.OwnerReference
+	for _, refRaw := range ownerRefsRaw {
+		if refMap, ok := refRaw.(map[string]interface{}); ok {
+			ownerRef := resources.OwnerReference{}
+			if apiVersion, ok := refMap["apiVersion"].(string); ok {
+				ownerRef.APIVersion = apiVersion
+			}
+			if kind, ok := refMap["kind"].(string); ok {
+				ownerRef.Kind = kind
+			}
+			if name, ok := refMap["name"].(string); ok {
+				ownerRef.Name = name
+			}
+			if uid, ok := refMap["uid"].(string); ok {
+				ownerRef.UID = uid
+			}
+			if controller, ok := refMap["controller"].(bool); ok {
+				ownerRef.Controller = controller
+			}
+			if blockOwnerDeletion, ok := refMap["blockOwnerDeletion"].(bool); ok {
+				ownerRef.BlockOwnerDeletion = blockOwnerDeletion
+			}
+			ownerRefs = append(ownerRefs, ownerRef)
+		}
+	}
+	return ownerRefs
+}
+
 // updatePodStatusWithMetadata updates the pod status and sets creation timestamp
+// Preserves existing metadata including ownerReferences
 func (pc *PodController) updatePodStatusWithMetadata(pod resources.Pod, status PodStatus, creationTime time.Time) error {
+	// Get existing pod from storage to preserve metadata
+	existingPod, err := pc.store.GetPod(pod.GetName())
+	if err != nil {
+		existingPod = nil
+	}
+
 	// Create a new pod with updated status and creation timestamp
 	metadata := pod.Metadata
 	if metadata.CreationTimestamp == "" {
 		metadata.CreationTimestamp = creationTime.Format(time.RFC3339)
+	}
+
+	// Preserve ownerReferences from existing pod if not set in incoming pod
+	if existingPod != nil && len(metadata.OwnerReferences) == 0 {
+		if meta, ok := existingPod["metadata"].(map[string]interface{}); ok {
+			if ownerRefsRaw, ok := meta["ownerReferences"].([]interface{}); ok {
+				metadata.OwnerReferences = convertToOwnerReferences(ownerRefsRaw)
+			}
+		}
 	}
 
 	updatedPod := resources.Pod{

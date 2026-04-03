@@ -20,6 +20,8 @@ func NewServer() {
 	controllers.InitTemplateRegistry()
 	// Initialize the ReplicaSet controller for managing ReplicaSets and their pods
 	controllers.InitReplicaSetController(storage.DefaultStore)
+	// Initialize the Deployment controller for managing Deployments and their ReplicaSets
+	controllers.InitDeploymentController(storage.DefaultStore)
 
 	r := gin.Default()
 
@@ -76,9 +78,11 @@ func wireRoutes(r *gin.Engine) {
 	// cluster + namespaced for pods/cms (similarly for apps/v1 deploy/rs below)
 	r.GET("/api/v1/pods", apis.ListPods)
 	r.POST("/api/v1/pods", apis.CreatePod)
+	r.GET("/api/v1/pods/:name", apis.GetPod)
 	r.DELETE("/api/v1/pods/:name", apis.DeletePod)
 	r.GET("/api/v1/namespaces/:namespace/pods", apis.ListPods)
 	r.POST("/api/v1/namespaces/:namespace/pods", apis.CreatePod)
+	r.GET("/api/v1/namespaces/:namespace/pods/:name", apis.GetPod)
 	r.DELETE("/api/v1/namespaces/:namespace/pods/:name", apis.DeletePod)
 	r.GET("/api/v1/configmaps", apis.ListConfigMaps)
 	r.POST("/api/v1/configmaps", apis.CreateConfigMap)

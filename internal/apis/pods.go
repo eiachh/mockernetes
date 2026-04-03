@@ -402,6 +402,21 @@ func CreatePod(c *gin.Context) {
 	c.JSON(http.StatusCreated, storedPod)
 }
 
+// GetPod handles GET /api/v1/pods/:name and /api/v1/namespaces/:namespace/pods/:name
+// Returns a single pod by name
+func GetPod(c *gin.Context) {
+	podName := c.Param("name")
+
+	// Retrieve the pod from storage
+	storedPod, err := storage.DefaultStore.GetPod(podName)
+	if err != nil {
+		WriteError(c, http.StatusNotFound, fmt.Sprintf("pods \"%s\" not found", podName))
+		return
+	}
+
+	c.JSON(http.StatusOK, storedPod)
+}
+
 // DeletePod handles DELETE /api/v1/pods/:name and /api/v1/namespaces/:namespace/pods/:name
 // Deletes a pod by name
 func DeletePod(c *gin.Context) {
